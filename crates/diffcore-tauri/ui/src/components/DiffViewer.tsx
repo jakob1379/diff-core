@@ -47,6 +47,10 @@ const DiffViewer = forwardRef<DiffViewerHandle, DiffViewerProps>(function DiffVi
         revealFirstDiffRef.current = false;
         editor.revealFirstDiff();
       });
+      if (revealFirstDiffRef.current) {
+        revealFirstDiffRef.current = false;
+        editor.revealFirstDiff();
+      }
 
       // Get the modified editor (right side of the diff)
       const modifiedEditor = editor.getModifiedEditor();
@@ -166,9 +170,9 @@ const DiffViewer = forwardRef<DiffViewerHandle, DiffViewerProps>(function DiffVi
   // Expose scrollToLine to parent via ref
   useImperativeHandle(ref, () => ({
     scrollToLine(startLine: number, endLine?: number) {
-      revealFirstDiffRef.current = false;
       const editor = editorRef.current?.getModifiedEditor?.();
       if (!editor) return;
+      revealFirstDiffRef.current = false;
       const end = endLine ?? startLine;
       // Scroll to the range center
       editor.revealLineInCenter(startLine);

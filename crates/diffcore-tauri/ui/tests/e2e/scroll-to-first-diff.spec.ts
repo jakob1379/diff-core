@@ -25,8 +25,11 @@ async function getVisibleRangeAndFirstChange(page: Page) {
     const lineChanges = diffEditor.getLineChanges() ?? [];
     const first = lineChanges[0];
     const firstChangeLine = first
-      ? (first.modifiedStartLineNumber || first.modifiedEndLineNumber)
+      ? (first.modifiedStartLineNumber || 1)
       : null;
+    if (!visibleRanges[0]) {
+      return { startLineNumber: null, endLineNumber: null, firstChangeLine };
+    }
     return {
       startLineNumber: visibleRanges[0].startLineNumber,
       endLineNumber: visibleRanges[0].endLineNumber,
@@ -61,7 +64,7 @@ test.describe("Bugfix — Diff viewer scrolls to first change", () => {
 
     await expect.poll(async () => {
       const { startLineNumber, endLineNumber, firstChangeLine } = await getVisibleRangeAndFirstChange(page);
-      if (firstChangeLine == null) return false;
+      if (firstChangeLine == null || startLineNumber == null || endLineNumber == null) return false;
       return firstChangeLine >= startLineNumber && firstChangeLine <= endLineNumber;
     }, { timeout: 10_000 }).toBe(true);
   });
