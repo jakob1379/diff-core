@@ -4375,7 +4375,7 @@ export default function App() {
 
         <div
           className="panel-resize-handle panel-resize-handle-left"
-          onMouseDown={leftPanelCollapsed ? undefined : startLeftPanelDrag}
+          onMouseDown={startLeftPanelDrag}
         />
 
         {/* Center panel: Monaco Diff Viewer */}
