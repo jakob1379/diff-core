@@ -43,6 +43,18 @@ const PROVIDER_LABELS: Record<LlmProvider, string> = {
 type OnboardingStep = "recommended" | "api";
 type SubscriptionProvider = "codex" | "claude";
 type RightPanelTab = "activity" | "annotations" | "source" | "comments";
+
+/** Catppuccin hues (blue, mauve, green, peach, pink, teal, yellow, red) as "r, g, b". */
+const GROUP_COLORS = [
+  "137, 180, 250",
+  "203, 166, 247",
+  "166, 227, 161",
+  "250, 179, 135",
+  "245, 194, 231",
+  "148, 226, 213",
+  "249, 226, 175",
+  "243, 139, 168",
+];
 type ActivityViewMode = "stream" | "all";
 type ActivityKind =
   | "system"
@@ -365,6 +377,14 @@ export default function App() {
   const rightPanelStartWidth = useRef(0);
   const rightPanelRafId = useRef(0);
 
+  // Left panel collapse/resize state
+  const [leftPanelCollapsed, setLeftPanelCollapsed] = useState(false);
+  const [leftPanelWidth, setLeftPanelWidth] = useState(280);
+  const leftPanelDragging = useRef(false);
+  const leftPanelStartX = useRef(0);
+  const leftPanelStartWidth = useRef(0);
+  const leftPanelRafId = useRef(0);
+
   // Groups manifest watching state
   const [watchedManifestPath, setWatchedManifestPath] = useState<string | null>(null);
 
@@ -379,14 +399,24 @@ export default function App() {
   // Right panel drag resize handlers (rAF-throttled to prevent jank)
   useEffect(() => {
     const onMouseMove = (e: MouseEvent) => {
-      if (!rightPanelDragging.current) return;
-      const clientX = e.clientX;
-      cancelAnimationFrame(rightPanelRafId.current);
-      rightPanelRafId.current = requestAnimationFrame(() => {
-        const delta = rightPanelStartX.current - clientX;
-        const newWidth = Math.max(200, Math.min(800, rightPanelStartWidth.current + delta));
-        setRightPanelWidth(newWidth);
-      });
+      if (rightPanelDragging.current) {
+        const clientX = e.clientX;
+        cancelAnimationFrame(rightPanelRafId.current);
+        rightPanelRafId.current = requestAnimationFrame(() => {
+          const delta = rightPanelStartX.current - clientX;
+          const newWidth = Math.max(200, Math.min(800, rightPanelStartWidth.current + delta));
+          setRightPanelWidth(newWidth);
+        });
+      }
+      if (leftPanelDragging.current) {
+        const clientX = e.clientX;
+        cancelAnimationFrame(leftPanelRafId.current);
+        leftPanelRafId.current = requestAnimationFrame(() => {
+          const delta = clientX - leftPanelStartX.current;
+          const newWidth = Math.max(200, Math.min(500, leftPanelStartWidth.current + delta));
+          setLeftPanelWidth(newWidth);
+        });
+      }
     };
     const onMouseUp = () => {
       if (rightPanelDragging.current) {
@@ -395,6 +425,13 @@ export default function App() {
         document.body.style.cursor = "";
         document.body.style.userSelect = "";
         document.querySelector(".panel-right")?.classList.remove("panel-right-dragging");
+      }
+      if (leftPanelDragging.current) {
+        leftPanelDragging.current = false;
+        cancelAnimationFrame(leftPanelRafId.current);
+        document.body.style.cursor = "";
+        document.body.style.userSelect = "";
+        document.querySelector(".panel-left")?.classList.remove("panel-left-dragging");
       }
     };
     window.addEventListener("mousemove", onMouseMove);
@@ -414,6 +451,16 @@ export default function App() {
     document.body.style.userSelect = "none";
     document.querySelector(".panel-right")?.classList.add("panel-right-dragging");
   }, [rightPanelWidth]);
+
+  const startLeftPanelDrag = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    leftPanelDragging.current = true;
+    leftPanelStartX.current = e.clientX;
+    leftPanelStartWidth.current = leftPanelWidth;
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    document.querySelector(".panel-left")?.classList.add("panel-left-dragging");
+  }, [leftPanelWidth]);
 
   // Demo mode: auto-load mock data on mount when not in Tauri
   const demoLoaded = useRef(false);
@@ -1600,6 +1647,13 @@ export default function App() {
     [analysis],
   );
   sortedGroupsRef.current = sortedGroups;
+
+  // Stable per-group identity color (Catppuccin hues as "r, g, b" triplets),
+  // shared between the expanded list stripe and the collapsed rail tint.
+  const groupColorById = useMemo(
+    () => new Map(sortedGroups.map((g, i) => [g.id, GROUP_COLORS[i % GROUP_COLORS.length]])),
+    [sortedGroups],
+  );
 
   // Get the Pass 2 deep analysis for the currently selected group
   const groupDeepAnalysis: Pass2Response | undefined = selectedGroup
@@ -3826,23 +3880,84 @@ export default function App() {
       {/* Three-panel layout */}
       <div className="panels">
         {/* Left panel: Flow Groups */}
-        <aside className="panel panel-left">
+        <aside
+          className={`panel panel-left ${leftPanelCollapsed ? "panel-left-collapsed" : ""}`}
+          style={leftPanelCollapsed ? undefined : { width: leftPanelWidth }}
+        >
           <div className="panel-header">
-            <span>Flow Groups</span>
-            {comments.length > 0 && (
-              <button
-                className="btn btn-copy-comments"
-                onClick={exportComments}
-                title="Copy all comments to clipboard (Shift+C)"
-              >
-                Copy Comments ({comments.length})
-              </button>
-            )}
-            {showRefined && refinementProvider && (
-              <span className="refined-badge" title={`Refined by ${refinementProvider}/${refinementModel}`}>
-                Refined by {refinementModel}
-              </span>
-            )}
+            <button
+              className="panel-collapse-btn panel-collapse-btn-left"
+              onClick={() => setLeftPanelCollapsed(!leftPanelCollapsed)}
+              title={leftPanelCollapsed ? "Expand panel" : "Collapse panel"}
+            >
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" />
+                <line x1="6" y1="2.5" x2="6" y2="13.5" />
+              </svg>
+            </button>
+            <div className="panel-header-left-content">
+              <span>Flow Groups</span>
+              {comments.length > 0 && (
+                <button
+                  className="btn btn-copy-comments"
+                  onClick={exportComments}
+                  title="Copy all comments to clipboard (Shift+C)"
+                >
+                  Copy Comments ({comments.length})
+                </button>
+              )}
+              {showRefined && refinementProvider && (
+                <span className="refined-badge" title={`Refined by ${refinementProvider}/${refinementModel}`}>
+                  Refined by {refinementModel}
+                </span>
+              )}
+            </div>
+          </div>
+          <div className="group-rail" data-testid="group-rail" aria-hidden={!leftPanelCollapsed}>
+              {sortedGroups.filter((g) => !(g.files.length === 0 && dismissedEmptyGroupIds.has(g.id))).map((group) => (
+                <div
+                  key={group.id}
+                  className={`group-rail-section ${selectedGroup?.id === group.id ? "selected" : ""}`}
+                  style={{ "--group-rgb": groupColorById.get(group.id) } as React.CSSProperties}
+                  data-risk={riskLevel(group.risk_score)}
+                  title={`${group.name} — risk ${group.risk_score.toFixed(2)}`}
+                  onClick={() => handleSelectGroup(group)}
+                >
+                  <span
+                    className={`group-review-check ${reviewedGroupIds.has(group.id) ? "checked" : ""}`}
+                    title={reviewedGroupIds.has(group.id) ? "Mark as unreviewed" : "Mark as reviewed"}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleGroupReviewed(group.id);
+                    }}
+                  >
+                    {reviewedGroupIds.has(group.id) ? "✓" : ""}
+                    {commentCountForGroup(group.id) > 0 && <span className="group-rail-chip-dot" />}
+                  </span>
+                  {group.files.map((file) => (
+                    <button
+                      key={file.path}
+                      className={`group-rail-file ${selectedFile === file.path ? "selected" : ""}`}
+                      title={file.path}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        openFileInTab(file.path, group.id);
+                      }}
+                    >
+                      <span className="file-role" title={file.role}>{roleInitial(file.role)}</span>
+                    </button>
+                  ))}
+                </div>
+              ))}
+              {analysis?.infrastructure_group && analysis.infrastructure_group.files.length > 0 && (
+                <button
+                  className="group-rail-chip group-rail-chip-infra"
+                  title={`Infrastructure (${analysis.infrastructure_group.files.length} files)`}
+                  onClick={() => setLeftPanelCollapsed(false)}
+                >
+                  I
+                </button>
+              )}
           </div>
           <div className="panel-body">
             {/* Refinement banner — shown after analysis when LLM access is available */}
@@ -3978,6 +4093,7 @@ export default function App() {
                   <div
                     key={group.id}
                     className={`group-item ${selectedGroup?.id === group.id ? "selected" : ""} ${changeIndicator ? "refined-change" : ""} ${reviewedGroupIds.has(group.id) ? "group-reviewed" : ""} ${isEmpty ? "group-empty" : ""}`}
+                    style={{ "--group-rgb": groupColorById.get(group.id) } as React.CSSProperties}
                     onClick={() => handleSelectGroup(group)}
                   >
                     <div className="group-header">
@@ -4252,6 +4368,10 @@ export default function App() {
             </div>
           )}
         </aside>
+
+        {!leftPanelCollapsed && (
+          <div className="panel-resize-handle panel-resize-handle-left" onMouseDown={startLeftPanelDrag} />
+        )}
 
         {/* Center panel: Monaco Diff Viewer */}
         <main className="panel panel-center">
