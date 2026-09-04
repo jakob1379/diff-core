@@ -1648,11 +1648,17 @@ export default function App() {
   );
   sortedGroupsRef.current = sortedGroups;
 
-  // Stable per-group identity color (Catppuccin hues as "r, g, b" triplets),
-  // shared between the expanded list stripe and the collapsed rail tint.
+  // Per-group color by review-order index, shared between the expanded list
+  // stripe and the collapsed rail tint. Hues repeat past 8 groups and can
+  // shift when the group set changes (e.g. original/refined toggle).
   const groupColorById = useMemo(
     () => new Map(sortedGroups.map((g, i) => [g.id, GROUP_COLORS[i % GROUP_COLORS.length]])),
     [sortedGroups],
+  );
+
+  const visibleGroups = useMemo(
+    () => sortedGroups.filter((g) => !(g.files.length === 0 && dismissedEmptyGroupIds.has(g.id))),
+    [sortedGroups, dismissedEmptyGroupIds],
   );
 
   // Get the Pass 2 deep analysis for the currently selected group
@@ -3895,7 +3901,7 @@ export default function App() {
                 <line x1="6" y1="2.5" x2="6" y2="13.5" />
               </svg>
             </button>
-            <div className="panel-header-left-content">
+            <div className="panel-header-left-content" inert={leftPanelCollapsed}>
               <span>Flow Groups</span>
               {comments.length > 0 && (
                 <button
@@ -3913,8 +3919,8 @@ export default function App() {
               )}
             </div>
           </div>
-          <div className="group-rail" data-testid="group-rail" aria-hidden={!leftPanelCollapsed}>
-              {sortedGroups.filter((g) => !(g.files.length === 0 && dismissedEmptyGroupIds.has(g.id))).map((group) => (
+          <div className="group-rail" data-testid="group-rail" inert={!leftPanelCollapsed}>
+              {visibleGroups.map((group) => (
                 <div
                   key={group.id}
                   className={`group-rail-section ${selectedGroup?.id === group.id ? "selected" : ""}`}
@@ -3951,7 +3957,7 @@ export default function App() {
               ))}
               {analysis?.infrastructure_group && analysis.infrastructure_group.files.length > 0 && (
                 <button
-                  className="group-rail-chip group-rail-chip-infra"
+                  className="group-rail-chip"
                   title={`Infrastructure (${analysis.infrastructure_group.files.length} files)`}
                   onClick={() => setLeftPanelCollapsed(false)}
                 >
@@ -3959,7 +3965,7 @@ export default function App() {
                 </button>
               )}
           </div>
-          <div className="panel-body">
+          <div className="panel-body" inert={leftPanelCollapsed}>
             {/* Refinement banner — shown after analysis when LLM access is available */}
             {analysis && !refinedGroups && !refining && aiAccessReady && (
               <div className="refinement-banner">
@@ -4081,9 +4087,7 @@ export default function App() {
               data-testid="group-list"
               data-group-list-transition={groupListTransitionState}
             >
-              {sortedGroups
-                .filter((group) => !(group.files.length === 0 && dismissedEmptyGroupIds.has(group.id)))
-                .map((group) => {
+              {visibleGroups.map((group) => {
                 const changeIndicator = showRefined
                   ? getGroupChangeIndicator(group, refinementResponse)
                   : null;
@@ -4355,7 +4359,7 @@ export default function App() {
           </div>
           {/* Sticky footer bar — always visible when comments exist */}
           {comments.length > 0 && (
-            <div className="panel-footer">
+            <div className="panel-footer" inert={leftPanelCollapsed}>
               <span className="panel-footer-count">{comments.length} comment{comments.length === 1 ? "" : "s"}</span>
               <button
                 className="btn btn-copy-comments-footer"
@@ -4369,9 +4373,10 @@ export default function App() {
           )}
         </aside>
 
-        {!leftPanelCollapsed && (
-          <div className="panel-resize-handle panel-resize-handle-left" onMouseDown={startLeftPanelDrag} />
-        )}
+        <div
+          className="panel-resize-handle panel-resize-handle-left"
+          onMouseDown={leftPanelCollapsed ? undefined : startLeftPanelDrag}
+        />
 
         {/* Center panel: Monaco Diff Viewer */}
         <main className="panel panel-center">

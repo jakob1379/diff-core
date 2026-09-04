@@ -1206,15 +1206,20 @@ body {
 
 .panel-collapse-btn-left {
   margin-right: 8px;
+}
 
-  display: flex;
-  align-items: center;
-  justify-content: center;
+.panel-resize-handle-left {
+  transition: width 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.panel-left-collapsed + .panel-resize-handle-left {
+  width: 0;
+  cursor: default;
 }
 
 .group-rail {
   position: absolute;
-  top: 33px;
+  top: 33px; /* .panel-header height (32px) + its 1px bottom border */
   bottom: 0;
   left: 0;
   width: 44px;
@@ -1314,14 +1319,6 @@ body {
 
 .group-rail-chip:hover {
   box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), 0.35);
-}
-
-.group-rail-chip.selected {
-  box-shadow: 0 0 0 2px rgba(var(--accent-rgb), 0.9);
-}
-
-.group-rail-chip.reviewed {
-  opacity: 0.4;
 }
 
 .group-rail-chip-dot {
