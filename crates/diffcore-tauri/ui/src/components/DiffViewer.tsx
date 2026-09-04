@@ -32,10 +32,21 @@ const DiffViewer = forwardRef<DiffViewerHandle, DiffViewerProps>(function DiffVi
   goToDefRef.current = onGoToDefinition;
 
   const decorationsRef = useRef<any>(null);
+  const revealFirstDiffRef = useRef(false);
+
+  useEffect(() => {
+    revealFirstDiffRef.current = true;
+  }, [fileDiff]);
 
   const handleEditorMount = useCallback(
     (editor: any) => {
       editorRef.current = editor;
+
+      editor.onDidUpdateDiff(() => {
+        if (!revealFirstDiffRef.current) return;
+        revealFirstDiffRef.current = false;
+        editor.revealFirstDiff();
+      });
 
       // Get the modified editor (right side of the diff)
       const modifiedEditor = editor.getModifiedEditor();
@@ -155,6 +166,7 @@ const DiffViewer = forwardRef<DiffViewerHandle, DiffViewerProps>(function DiffVi
   // Expose scrollToLine to parent via ref
   useImperativeHandle(ref, () => ({
     scrollToLine(startLine: number, endLine?: number) {
+      revealFirstDiffRef.current = false;
       const editor = editorRef.current?.getModifiedEditor?.();
       if (!editor) return;
       const end = endLine ?? startLine;
