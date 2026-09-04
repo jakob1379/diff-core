@@ -927,6 +927,7 @@ export default function App() {
       // Cancel any pending debounced file nav from the previous group
       if (pendingFileNav.current) clearTimeout(pendingFileNav.current);
       setSelectedGroup(group);
+      if (group.id === "infra") setInfraExpanded(true);
       // Picking a group is a request to read that group, not the PR blurb.
       setShowPrOverview(false);
       // Exit replay mode when switching groups
@@ -1599,7 +1600,34 @@ export default function App() {
       : [],
     [analysis],
   );
-  sortedGroupsRef.current = sortedGroups;
+  // Synthetic group so the Ungrouped section is reachable with J/K and j/k.
+  const infraGroup = useMemo<FlowGroup | null>(() => {
+    const infra = analysis?.infrastructure_group;
+    if (!infra || infra.files.length === 0) return null;
+    return {
+      id: "infra",
+      name: "Ungrouped",
+      entrypoint: null,
+      files: infra.files.map((path, i) => ({
+        path,
+        flow_position: i,
+        role: "Infrastructure",
+        changes: { additions: 0, deletions: 0 },
+        symbols_changed: [],
+      })),
+      edges: [],
+      risk_score: 0,
+      review_order: sortedGroups.length + 1,
+    };
+  }, [analysis, sortedGroups]);
+  sortedGroupsRef.current = infraGroup ? [...sortedGroups, infraGroup] : sortedGroups;
+
+  // Keep the sub-group that holds the selected file open while navigating the Ungrouped section.
+  useEffect(() => {
+    if (selectedGroup?.id !== "infra" || !selectedFile) return;
+    const sg = analysis?.infrastructure_group?.sub_groups?.find((g) => g.files.includes(selectedFile));
+    if (sg) setInfraSubGroupsExpanded((prev) => (prev.has(sg.name) ? prev : new Set(prev).add(sg.name)));
+  }, [analysis, selectedGroup, selectedFile]);
 
   // Get the Pass 2 deep analysis for the currently selected group
   const groupDeepAnalysis: Pass2Response | undefined = selectedGroup
@@ -4127,7 +4155,7 @@ export default function App() {
               })}
               {/* Infrastructure group — collapsed by default, shows count, with sub-groups */}
               {analysis?.infrastructure_group && analysis.infrastructure_group.files.length > 0 && (
-                <div className="group-item infra-group">
+                <div className={`group-item infra-group ${selectedGroup?.id === "infra" ? "selected" : ""}`}>
                   <div
                     className="group-header"
                     style={{ cursor: "pointer" }}
@@ -4181,6 +4209,7 @@ export default function App() {
                                       className={`file-item ${selectedFile === f ? "selected" : ""}`}
                                       onClick={(e) => {
                                         e.stopPropagation();
+                                        if (selectedGroup?.id !== "infra" && infraGroup) setSelectedGroup(infraGroup);
                                         openFileInTab(f, "infra");
                                       }}
                                     >
@@ -4203,6 +4232,7 @@ export default function App() {
                               className={`file-item ${selectedFile === f ? "selected" : ""}`}
                               onClick={(e) => {
                                 e.stopPropagation();
+                                if (selectedGroup?.id !== "infra" && infraGroup) setSelectedGroup(infraGroup);
                                 openFileInTab(f, "infra");
                               }}
                             >
