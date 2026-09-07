@@ -414,3 +414,33 @@ test.describe("Infrastructure Sub-Groups — Rendering (Phase 5.3)", () => {
     expect(await allFiles.count()).toBe(5); // 3 + 2
   });
 });
+
+test.describe("Ungrouped navigation", () => {
+  test("J enters Ungrouped, j walks its files, K leaves it", async ({ page }) => {
+    await page.goto("/");
+    await waitForAnalysis(page);
+
+    await page.evaluate((analysis) => {
+      (window as any).__TEST_API__.setAnalysis(analysis);
+    }, analysisWithSubGroups());
+    await page.waitForTimeout(1000);
+
+    await page.locator(".group-item").first().click();
+    await page.waitForTimeout(300);
+
+    await page.keyboard.press("J");
+    await page.waitForTimeout(300);
+    await expect(page.locator(".infra-group")).toHaveClass(/selected/);
+    expect(await page.evaluate(() => (window as any).__TEST_API__.getSelectedGroup()?.id)).toBe("infra");
+    expect(await page.evaluate(() => (window as any).__TEST_API__.getSelectedFile())).toBe("Dockerfile");
+    await expect(page.locator(".infra-group .file-item.selected")).toBeVisible();
+
+    await page.keyboard.press("j");
+    await page.waitForTimeout(500);
+    expect(await page.evaluate(() => (window as any).__TEST_API__.getSelectedFile())).not.toBe("Dockerfile");
+
+    await page.keyboard.press("K");
+    await page.waitForTimeout(300);
+    expect(await page.evaluate(() => (window as any).__TEST_API__.getSelectedGroup()?.id)).toBe("group_1");
+  });
+});
