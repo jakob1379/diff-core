@@ -37,7 +37,7 @@ test("auto-detected branches are re-detected after a reload", async ({ page }) =
   await expect(page.locator("[data-testid='head-branch-dropdown'] .branch-name")).toHaveText("feature/user-auth");
 
   await page.evaluate(() => {
-    (window as { __TEST_API__: { setHeadRef: (ref: string) => void } }).__TEST_API__.setHeadRef("release/v2.0");
+    (window as any).__TEST_API__.setHeadRef("release/v2.0");
   });
   await expect(page.locator("[data-testid='head-branch-dropdown'] .branch-name")).toHaveText("release/v2.0");
 
