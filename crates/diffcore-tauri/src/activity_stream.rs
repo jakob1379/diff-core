@@ -3,7 +3,7 @@ use std::convert::Infallible;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener as StdTcpListener};
 use std::sync::Arc;
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use async_stream::stream;
 use axum::extract::{Path, State};
@@ -90,7 +90,14 @@ impl JobEvent {
 struct JobState {
     history: Vec<JobEvent>,
     sender: broadcast::Sender<JobEvent>,
+    /// Set once the job completes or fails; until then the job is live and kept.
+    finished_at: Option<Instant>,
 }
+
+/// How long a finished job stays subscribable. Long enough that a reloaded page
+/// can still collect the result it was waiting on, short enough that completed
+/// jobs — whose history holds the full result payload — do not accumulate.
+const JOB_RETENTION: Duration = Duration::from_secs(30 * 60);
 
 #[derive(Default)]
 pub struct ActivityManager {
@@ -124,12 +131,15 @@ impl ActivityManager {
             timestamp_ms: timestamp_ms(),
         };
 
+        self.evict_finished(JOB_RETENTION).await;
+
         let mut jobs = self.jobs.write().await;
         jobs.insert(
             job_id.clone(),
             JobState {
                 history: vec![started],
                 sender,
+                finished_at: None,
             },
         );
 
@@ -148,9 +158,22 @@ impl ActivityManager {
         Some((job.history.clone(), job.sender.subscribe()))
     }
 
+    /// Drop finished jobs older than `retention`. Called when a new job starts,
+    /// which keeps the map bounded without a timer task: nothing is created, so
+    /// nothing grows.
+    pub async fn evict_finished(&self, retention: Duration) {
+        self.jobs
+            .write()
+            .await
+            .retain(|_, job| job.finished_at.is_none_or(|at| at.elapsed() < retention));
+    }
+
     async fn push_event(&self, job_id: &str, event: JobEvent) {
         let mut jobs = self.jobs.write().await;
         if let Some(job) = jobs.get_mut(job_id) {
+            if event.is_terminal() {
+                job.finished_at = Some(Instant::now());
+            }
             job.history.push(event.clone());
             let _ = job.sender.send(event);
         }
@@ -311,4 +334,71 @@ fn timestamp_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis() as u64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn finished_job(manager: &Arc<ActivityManager>) -> String {
+        let handle = manager
+            .create_job("refinement", "codex", "default", "Refining")
+            .await;
+        handle
+            .complete("refinement", serde_json::json!({ "refined_groups": [] }))
+            .await;
+        handle.job_id().to_string()
+    }
+
+    #[tokio::test]
+    async fn evicts_finished_jobs_past_retention_and_keeps_live_ones() {
+        let manager = Arc::new(ActivityManager::new());
+        let done = finished_job(&manager).await;
+        let live = manager
+            .create_job("refinement", "codex", "default", "Still going")
+            .await
+            .job_id()
+            .to_string();
+
+        manager.evict_finished(Duration::ZERO).await;
+
+        assert!(
+            manager.subscribe(&done).await.is_none(),
+            "finished job should be dropped once past retention"
+        );
+        assert!(
+            manager.subscribe(&live).await.is_some(),
+            "a job that has not reached a terminal event must survive eviction"
+        );
+    }
+
+    #[tokio::test]
+    async fn keeps_finished_jobs_within_retention_so_a_reload_can_collect_them() {
+        let manager = Arc::new(ActivityManager::new());
+        let done = finished_job(&manager).await;
+
+        manager.evict_finished(JOB_RETENTION).await;
+
+        let (history, _) = manager.subscribe(&done).await.expect("job still retained");
+        assert!(history.iter().any(JobEvent::is_terminal));
+    }
+
+    #[tokio::test]
+    async fn starting_a_job_sweeps_the_map() {
+        let manager = Arc::new(ActivityManager::new());
+        let done = finished_job(&manager).await;
+        manager
+            .jobs
+            .write()
+            .await
+            .get_mut(&done)
+            .unwrap()
+            .finished_at = Some(Instant::now() - JOB_RETENTION - Duration::from_secs(1));
+
+        let _ = manager
+            .create_job("refinement", "codex", "default", "Next")
+            .await;
+
+        assert!(manager.subscribe(&done).await.is_none());
+    }
 }
