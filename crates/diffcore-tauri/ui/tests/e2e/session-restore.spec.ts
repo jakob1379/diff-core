@@ -19,12 +19,15 @@ test("repository field and branch selection survive a page reload", async ({ pag
   await page.locator("[data-testid='head-branch-dropdown'] .branch-option-name", { hasText: "fix/login-bug" }).click();
   await expect(page.locator("[data-testid='head-branch-dropdown'] .branch-name")).toHaveText("fix/login-bug");
 
-  await page.reload();
-  await waitForDemoApp(page);
+  // Twice: the pin itself has to survive a reload, not just the refs it produced.
+  for (let i = 0; i < 2; i++) {
+    await page.reload();
+    await waitForDemoApp(page);
 
-  await expect(page.locator(".repo-input")).toHaveValue("/work/other-repo");
-  await expect(page.locator("[data-testid='base-branch-dropdown'] .branch-name")).toHaveText("develop");
-  await expect(page.locator("[data-testid='head-branch-dropdown'] .branch-name")).toHaveText("fix/login-bug");
+    await expect(page.locator(".repo-input")).toHaveValue("/work/other-repo");
+    await expect(page.locator("[data-testid='base-branch-dropdown'] .branch-name")).toHaveText("develop");
+    await expect(page.locator("[data-testid='head-branch-dropdown'] .branch-name")).toHaveText("fix/login-bug");
+  }
 
   await page.locator(".repo-input").fill("/work/third-repo");
   await expect(page.locator("[data-testid='base-branch-dropdown'] .branch-name")).toHaveText("main");

@@ -317,7 +317,7 @@ export default function App() {
   const prRefs = useRef(false);
   // Refs the user picked win over auto-detect for the restored repo only;
   // auto-detected refs are re-detected so a reload still sees a new checkout.
-  const refsPinned = useRef(false);
+  const refsPinned = useRef(restored && !!session.refsPinned);
   const restoredRepo = useRef(restored && session.refsPinned ? session.repoPath : null);
   useEffect(() => {
     saveStored(SESSION_KEY, {
