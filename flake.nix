@@ -58,6 +58,17 @@
           ];
           RUSTC_WRAPPER = "sccache";
 
+          # sccache refuses to cache any rustc call carrying -C incremental,
+          # which cargo passes for every dev/test build — so the wrapper above
+          # is dead weight unless incremental is off. Across the worktrees this
+          # repo is developed in, sharing 760+ compiled dependency crates beats
+          # incremental relinking inside a single one.
+          CARGO_INCREMENTAL = "0";
+
+          # Default is 10G, which one worktree's dependency graph nearly fills;
+          # several branches in flight evict each other faster than they hit.
+          SCCACHE_CACHE_SIZE = "50G";
+
           # Playwright browsers come from nixpkgs, never from npm's downloader:
           # the downloaded builds are not patched for NixOS and die on launch.
           # `@playwright/test` in crates/diffcore-tauri/ui/package.json is pinned
