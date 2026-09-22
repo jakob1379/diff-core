@@ -713,6 +713,57 @@ pub fn has_refinements(response: &RefinementResponse) -> bool {
         || !response.reclassifications.is_empty()
 }
 
+/// Share of the fresh diff's files that may be new since the last refinement
+/// before carrying that refinement over stops paying off. Past this, the
+/// grouping has moved far enough that repairing it costs the LLM more context
+/// than regrouping from scratch.
+pub const INCREMENTAL_MAX_NEW_FILE_RATIO: f64 = 0.10;
+
+fn all_paths(analysis: &crate::types::AnalysisOutput) -> HashSet<&str> {
+    analysis
+        .groups
+        .iter()
+        .flat_map(|g| g.files.iter().map(|f| f.path.as_str()))
+        .chain(
+            analysis
+                .infrastructure_group
+                .iter()
+                .flat_map(|ig| ig.files.iter().map(String::as_str)),
+        )
+        .collect()
+}
+
+fn previous_paths<'a>(
+    prev_groups: &'a [FlowGroup],
+    prev_infra: Option<&'a InfrastructureGroup>,
+) -> HashSet<&'a str> {
+    prev_groups
+        .iter()
+        .flat_map(|g| g.files.iter().map(|f| f.path.as_str()))
+        .chain(
+            prev_infra
+                .iter()
+                .flat_map(|ig| ig.files.iter().map(String::as_str)),
+        )
+        .collect()
+}
+
+/// Fraction of the fresh analysis's files that did not exist in the previous
+/// refinement. Compare against [`INCREMENTAL_MAX_NEW_FILE_RATIO`] to decide
+/// whether to carry that refinement over or start again.
+pub fn new_file_ratio(
+    fresh: &crate::types::AnalysisOutput,
+    prev_groups: &[FlowGroup],
+    prev_infra: Option<&InfrastructureGroup>,
+) -> f64 {
+    let fresh_paths = all_paths(fresh);
+    if fresh_paths.is_empty() {
+        return 0.0;
+    }
+    let prev_paths = previous_paths(prev_groups, prev_infra);
+    fresh_paths.difference(&prev_paths).count() as f64 / fresh_paths.len() as f64
+}
+
 /// Carry a previously refined grouping onto a fresh analysis for incremental
 /// refinement.
 ///
@@ -731,31 +782,13 @@ pub fn carry_over_grouping(
     prev_groups: &[FlowGroup],
     prev_infra: Option<&InfrastructureGroup>,
 ) -> (crate::types::AnalysisOutput, String) {
-    let fresh_paths: HashSet<&str> = fresh
-        .groups
-        .iter()
-        .flat_map(|g| g.files.iter().map(|f| f.path.as_str()))
-        .chain(
-            fresh
-                .infrastructure_group
-                .iter()
-                .flat_map(|ig| ig.files.iter().map(String::as_str)),
-        )
-        .collect();
+    let fresh_paths = all_paths(fresh);
     let fresh_grouped: HashSet<&str> = fresh
         .groups
         .iter()
         .flat_map(|g| g.files.iter().map(|f| f.path.as_str()))
         .collect();
-    let prev_paths: HashSet<&str> = prev_groups
-        .iter()
-        .flat_map(|g| g.files.iter().map(|f| f.path.as_str()))
-        .chain(
-            prev_infra
-                .iter()
-                .flat_map(|ig| ig.files.iter().map(String::as_str)),
-        )
-        .collect();
+    let prev_paths = previous_paths(prev_groups, prev_infra);
 
     let added = fresh_paths.difference(&prev_paths).count();
     let removed = prev_paths.difference(&fresh_paths).count();
@@ -2601,6 +2634,54 @@ mod tests {
             },
             annotations: None,
         }
+    }
+
+    #[test]
+    fn new_file_ratio_gates_incremental_on_how_much_the_diff_moved() {
+        let prev = vec![make_group(
+            "group_refined_1",
+            "auth",
+            (0..20)
+                .map(|i| make_file(&format!("f{i}.ts"), i))
+                .collect(),
+        )];
+        let unchanged = make_carry_analysis(
+            vec![make_group(
+                "group_1",
+                "fresh",
+                (0..20)
+                    .map(|i| make_file(&format!("f{i}.ts"), i))
+                    .collect(),
+            )],
+            vec![],
+        );
+        assert_eq!(new_file_ratio(&unchanged, &prev, None), 0.0);
+
+        // One new file in 21 is under the threshold: carry the refinement over.
+        let one_new = make_carry_analysis(
+            vec![make_group(
+                "group_1",
+                "fresh",
+                (0..21)
+                    .map(|i| make_file(&format!("f{i}.ts"), i))
+                    .collect(),
+            )],
+            vec![],
+        );
+        assert!(new_file_ratio(&one_new, &prev, None) <= INCREMENTAL_MAX_NEW_FILE_RATIO);
+
+        // Five new files in 25 is over it: regroup from scratch.
+        let many_new = make_carry_analysis(
+            vec![make_group(
+                "group_1",
+                "fresh",
+                (0..25)
+                    .map(|i| make_file(&format!("f{i}.ts"), i))
+                    .collect(),
+            )],
+            vec![],
+        );
+        assert!(new_file_ratio(&many_new, &prev, None) > INCREMENTAL_MAX_NEW_FILE_RATIO);
     }
 
     #[test]

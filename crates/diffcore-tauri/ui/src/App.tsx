@@ -478,9 +478,10 @@ export default function App() {
   const groupListTransitionTimers = useRef<number[]>([]);
   const [refining, setRefining] = useState(false);
   const refinementJobIdRef = useRef<string | null>(null);
-  // Whether "Refine (update)" has a baseline to build on. Cleared on every
-  // re-analyze; the disk-cache lookup after analysis re-seeds it.
-  const [hasRefinementBaseline, setHasRefinementBaseline] = useState(false);
+  // Armed by an explicit Analyze click when "Refine" is checked, so the LLM
+  // pass chains onto that one click. Auto-analysis on load never arms it and
+  // so never spends tokens.
+  const refineAfterAnalysisRef = useRef(false);
   const activityAbortRef = useRef<(() => void) | null>(null);
   const [newCommitsAvailable, setNewCommitsAvailable] = useState(false);
 
@@ -1175,7 +1176,6 @@ export default function App() {
     setRefinementHadChanges(null);
     setShowRefined(false);
     refinementApplied.current = false;
-    setHasRefinementBaseline(false);
     setNewCommitsAvailable(false);
     // Reset review tick-off state
     setReviewedGroupIds(new Set());
@@ -1221,8 +1221,8 @@ export default function App() {
       }
       // Check for cached refinement. Auto-apply only when it was computed
       // against this head commit (legacy entries without a SHA still apply)
-      // and it covers exactly the files in the fresh diff; a stale one
-      // becomes the baseline for "Refine (update)" instead.
+      // and it covers exactly the files in the fresh diff; a stale one is
+      // left for the backend to carry over on the next incremental refine.
       if (HAS_BACKEND) {
         tauriInvoke<RefinementResult | null>("get_cached_refinement", { repoPath: path || null }).then((cached) => {
           if (!cached) return;
@@ -1244,8 +1244,6 @@ export default function App() {
             cachedFiles.size === freshFiles.size && [...cachedFiles].every((p) => freshFiles.has(p));
           if (sameFiles && (!cachedSha || !freshSha || cachedSha === freshSha)) {
             applyRefinementResult(cached, { fromCache: true });
-          } else {
-            setHasRefinementBaseline(true);
           }
         }).catch(() => {});
       }
@@ -1352,6 +1350,24 @@ export default function App() {
     resolvedRefinementProvider,
   );
   const aiAccessReady = hasApiKey || !!recommendedSubscriptionProvider;
+  /** The top-bar "Refine" checkbox. Backed by the persisted refinement
+   *  setting, so ticking it off is also how the user changes the default. */
+  const refineOnAnalyze = llmSettings?.refinement_enabled ?? true;
+
+  /** Every explicit "analyze now" action. Arms the refine chain from the
+   *  checkbox; `refresh` re-resolves a PR/MR URL first so new upstream commits
+   *  are picked up. */
+  const startAnalysis = useCallback(
+    (opts?: { refresh?: boolean }) => {
+      refineAfterAnalysisRef.current = refineOnAnalyze;
+      if (opts?.refresh) {
+        refreshAnalysis();
+      } else {
+        submitRepoInput();
+      }
+    },
+    [refineOnAnalyze, refreshAnalysis, submitRepoInput],
+  );
 
   /**
    * Run Pass 1 and stash the PR-level overview without taking over the panel.
@@ -1455,8 +1471,6 @@ export default function App() {
     if (!current) return;
     if (opts?.fromCache && refinementApplied.current) return;
     refinementApplied.current = true;
-
-    setHasRefinementBaseline(true);
 
     setOriginalGroups((prev) => prev ?? current.groups);
 
@@ -1614,6 +1628,16 @@ export default function App() {
     restorePending.current = false;
     runAnalysis().then(reattachJobs);
   }, [llmSettings, runAnalysis, reattachJobs]);
+  // One click: an explicit Analyze with "Refine" checked runs the LLM pass as
+  // soon as the fresh groups land. Always incremental — the backend carries
+  // over the previous refinement when the diff has barely moved and falls
+  // back to a from-scratch pass when it has.
+  useEffect(() => {
+    if (!refineAfterAnalysisRef.current || loading) return;
+    refineAfterAnalysisRef.current = false;
+    if (!analysis || error || !aiAccessReady) return;
+    void runRefinement({ incremental: true });
+  }, [analysis, loading, error, aiAccessReady, runRefinement]);
 
   /** Toggle between original and refined groups. */
   const toggleRefinedView = useCallback(
@@ -3482,7 +3506,7 @@ export default function App() {
             onKeyDown={(e) => {
               if (e.key === "Enter" && repoPath && !loading) {
                 (e.target as HTMLInputElement).blur();
-                submitRepoInput();
+                startAnalysis();
               }
             }}
           />
@@ -3571,7 +3595,7 @@ export default function App() {
           </div>
 
           <button
-            className={`btn ${analysis && !loading ? "btn-analyze-destructive" : "btn-primary"}`}
+            className={`btn btn-analyze ${newCommitsAvailable || analyzeArmed ? "btn-analyze-destructive" : "btn-primary"}`}
             data-testid="analyze-btn"
             onClick={() => {
               if (analysis && !loading && !analyzeArmed) {
@@ -3579,7 +3603,7 @@ export default function App() {
                 return;
               }
               setAnalyzeArmed(false);
-              submitRepoInput();
+              startAnalysis({ refresh: newCommitsAvailable });
             }}
             onBlur={() => setAnalyzeArmed(false)}
             disabled={loading || !repoPath}
@@ -3587,11 +3611,19 @@ export default function App() {
               analysis && !loading
                 ? analyzeArmed
                   ? "Click again to discard the current groups and any refinement"
-                  : "Re-run analysis. Discards the current groups and any refinement, so it asks for a second click"
+                  : newCommitsAvailable
+                    ? "New commits upstream. Re-run analysis — discards the current groups and any refinement, so it asks for a second click"
+                    : "Re-run analysis. Discards the current groups and any refinement, so it asks for a second click"
                 : "Analyze the diff between the selected branches"
             }
           >
-            {loading ? "Analyzing..." : analyzeArmed ? "Confirm re-analyze?" : "Analyze"}
+            {loading
+              ? "Analyzing…"
+              : analyzeArmed
+                ? "Confirm?"
+                : analysis
+                  ? "Reanalyze"
+                  : "Analyze"}
           </button>
           {refining ? (
             <button
@@ -3603,23 +3635,24 @@ export default function App() {
               Refining&#8230; &#10005;
             </button>
           ) : (
-            <button
-              className="btn btn-primary"
-              data-testid="refine-btn"
-              onClick={() => runRefinement({ incremental: !!(refinedGroups || hasRefinementBaseline) })}
-              disabled={!analysis || loading || !aiAccessReady}
+            <label
+              className={`refine-toggle${aiAccessReady ? "" : " disabled"}`}
+              data-testid="refine-toggle"
               title={
-                loading
-                  ? "Wait for the analysis to finish"
-                  : !analysis
-                    ? "Run Analyze first"
-                    : !aiAccessReady
-                      ? "AI setup required — choose Codex CLI, Claude Code, or a direct API key"
-                      : `Refine groupings using ${resolvedRefinementProvider ?? "anthropic"} (${resolvedRefinementModel ?? "default"})`
+                aiAccessReady
+                  ? `Run an LLM refinement pass right after Analyze, using ${resolvedRefinementProvider ?? "anthropic"} (${resolvedRefinementModel ?? "default"})`
+                  : "AI setup required — choose Codex CLI, Claude Code, or a direct API key"
               }
             >
-              {refinedGroups || hasRefinementBaseline ? "Refine (update)" : "Refine"}
-            </button>
+              <input
+                type="checkbox"
+                data-testid="refine-checkbox"
+                checked={refineOnAnalyze}
+                disabled={!aiAccessReady || !llmSettings}
+                onChange={(e) => updateSetting("refinement_enabled", e.target.checked)}
+              />
+              Refine
+            </label>
           )}
         </div>
         <div className="top-bar-right">
@@ -4204,7 +4237,7 @@ export default function App() {
           <span className="new-commits-text">
             {prUrlRef.current ? "This pull request was updated." : "This branch was updated."}
           </span>
-          <button className="btn" onClick={refreshAnalysis}>
+          <button className="btn" onClick={() => startAnalysis({ refresh: true })}>
             Refresh
           </button>
           <button

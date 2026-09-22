@@ -1080,6 +1080,36 @@ body {
 
 /* ── Analyze / Refine ── */
 
+/* Fixed width so the label can swap between Analyze / Reanalyze / Analyzing…
+   / Confirm? without the top bar shifting under the pointer. */
+.btn-analyze {
+  min-width: 96px;
+}
+
+.refine-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--text-primary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.refine-toggle input {
+  margin: 0;
+  cursor: pointer;
+}
+
+.refine-toggle.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.refine-toggle.disabled input {
+  cursor: not-allowed;
+}
+
 .btn-analyze-destructive {
   background: var(--risk-high);
   border-color: var(--risk-high);
