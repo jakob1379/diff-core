@@ -1761,8 +1761,9 @@ fn load_previous_refinement(state: &AppState, repo_path: Option<&str>) -> Option
 
 /// Baseline for a refinement pass: the cached analysis as-is, or in
 /// incremental mode the previous refined grouping carried onto it so the LLM
-/// is asked only for adjustments. With no previous refinement to build on,
-/// incremental falls through to a from-scratch refine.
+/// is asked only for adjustments. With no previous refinement to build on, or
+/// with too much of the diff new since it, incremental falls through to a
+/// from-scratch refine — past that point regrouping is cheaper than repair.
 /// ponytail: without incremental, the baseline is whatever last_analysis
 /// holds — after an earlier refinement that's the refined groups, not the
 /// deterministic ones. Keep a pristine copy in AppState if "from scratch"
@@ -1780,17 +1781,27 @@ fn refinement_baseline(
     if !incremental {
         return (analysis, summary, false);
     }
-    match load_previous_refinement(state, repo_path) {
-        Some(prev) => {
-            let (carried, delta) = refinement::carry_over_grouping(
-                &analysis,
-                &prev.refined_groups,
-                prev.infrastructure_group.as_ref(),
-            );
-            (carried, delta, true)
-        }
-        None => (analysis, summary, false),
+    let Some(prev) = load_previous_refinement(state, repo_path) else {
+        return (analysis, summary, false);
+    };
+    let new_ratio = refinement::new_file_ratio(
+        &analysis,
+        &prev.refined_groups,
+        prev.infrastructure_group.as_ref(),
+    );
+    if new_ratio > refinement::INCREMENTAL_MAX_NEW_FILE_RATIO {
+        log::info!(
+            "Refinement: {:.0}% of files are new since the last refinement; regrouping from scratch",
+            new_ratio * 100.0,
+        );
+        return (analysis, summary, false);
     }
+    let (carried, delta) = refinement::carry_over_grouping(
+        &analysis,
+        &prev.refined_groups,
+        prev.infrastructure_group.as_ref(),
+    );
+    (carried, delta, true)
 }
 
 /// Store a refinement result in the global cache ($XDG_CACHE_HOME/diffcore/refinements/).

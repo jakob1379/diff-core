@@ -23,6 +23,18 @@ async function setActivityEntries(page: Page, entries: Array<Record<string, unkn
   }, entries);
 }
 
+/** Trigger the LLM pass the way the top bar does it now: the Refine checkbox is
+ *  on by default, so Analyze (confirmed) re-runs the analysis and chains the
+ *  refinement onto it. Returns as the refinement starts streaming. */
+async function refineViaTopBar(page: Page) {
+  await expect(page.getByTestId("refine-checkbox")).toBeChecked();
+  const analyze = page.getByTestId("analyze-btn");
+  await analyze.click();
+  await expect(analyze).toHaveText("Confirm?");
+  await analyze.click();
+  await expect(analyze).toHaveText("Reanalyze");
+}
+
 test.describe("AI activity stream", () => {
   test.beforeEach(async ({ page }) => {
     await waitForDemoApp(page);
@@ -65,7 +77,7 @@ test.describe("AI activity stream", () => {
       claude_authenticated: true,
     });
 
-    await page.getByTestId("refine-btn").click();
+    await refineViaTopBar(page);
 
     const panel = page.getByTestId("activity-panel");
     const log = page.getByTestId("activity-log");
