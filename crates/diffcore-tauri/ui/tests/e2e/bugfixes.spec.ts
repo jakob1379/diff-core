@@ -101,21 +101,85 @@ test.describe("Bugfix — Keyboard shortcuts with Monaco focus", () => {
     await expect(readOnlyMessage).not.toBeVisible();
   });
 
-  test("04 — x toggles reviewed state from Monaco focus", async ({ page }) => {
+  test("04 — x toggles file reviewed state from Monaco focus", async ({ page }) => {
     await focusMonacoEditor(page);
 
-    // Press x to toggle reviewed
+    // Press x to toggle the selected file's reviewed state
     await page.keyboard.press("x");
     await page.waitForTimeout(300);
 
-    // The group should now show a reviewed indicator
-    const reviewedGroup = page.locator(".group-item.selected .group-review-check");
-    await expect(reviewedGroup).toHaveClass(/checked/);
+    const reviewedFile = page.locator(".file-item.selected .file-review-check");
+    await expect(reviewedFile).toHaveClass(/checked/);
 
     // Toggle it back
     await page.keyboard.press("x");
     await page.waitForTimeout(300);
+    await expect(reviewedFile).not.toHaveClass(/checked/);
+  });
+
+  test("04b — Shift+X toggles group reviewed state and syncs files", async ({ page }) => {
+    await focusMonacoEditor(page);
+
+    // Shift+X marks the group and all its files reviewed
+    await page.keyboard.press("Shift+X");
+    await page.waitForTimeout(300);
+
+    const reviewedGroup = page.locator(".group-item.selected .group-review-check");
+    await expect(reviewedGroup).toHaveClass(/checked/);
+    const fileChecks = page.locator(".group-item.selected .file-review-check");
+    for (const check of await fileChecks.all()) {
+      await expect(check).toHaveClass(/checked/);
+    }
+
+    // Un-reviewing one file un-reviews the group
+    await page.keyboard.press("x");
+    await page.waitForTimeout(300);
     await expect(reviewedGroup).not.toHaveClass(/checked/);
+
+    // Re-reviewing the last file marks the group reviewed again
+    await page.keyboard.press("x");
+    await page.waitForTimeout(300);
+    await expect(reviewedGroup).toHaveClass(/checked/);
+
+    // Shift+X again clears the group and all files
+    await page.keyboard.press("Shift+X");
+    await page.waitForTimeout(300);
+    await expect(reviewedGroup).not.toHaveClass(/checked/);
+    for (const check of await fileChecks.all()) {
+      await expect(check).not.toHaveClass(/checked/);
+    }
+  });
+
+  test("04c — Ungrouped bucket ticks off like a group", async ({ page }) => {
+    await page.locator(".infra-group .group-header").click();
+    for (const header of await page.locator(".infra-sub-group-header").all()) {
+      await header.click();
+    }
+    const infraCheck = page.locator(".infra-group .group-review-check");
+    const fileChecks = page.locator(".infra-group .file-review-check");
+    expect(await fileChecks.count()).toBeGreaterThan(1);
+
+    // Header check marks every ungrouped file
+    await infraCheck.click();
+    for (const check of await fileChecks.all()) {
+      await expect(check).toHaveClass(/checked/);
+    }
+    await expect(infraCheck).toHaveClass(/checked/);
+
+    // Unchecking one file unmarks the bucket; rechecking it restores it
+    await fileChecks.first().click();
+    await expect(infraCheck).not.toHaveClass(/checked/);
+    await fileChecks.first().click();
+    await expect(infraCheck).toHaveClass(/checked/);
+
+    // Shift+X with an ungrouped file selected toggles the bucket
+    await page.locator(".infra-group .file-item").first().click();
+    await page.waitForTimeout(300);
+    await page.keyboard.press("Shift+X");
+    await expect(infraCheck).not.toHaveClass(/checked/);
+    for (const check of await fileChecks.all()) {
+      await expect(check).not.toHaveClass(/checked/);
+    }
   });
 
   test("05 — r enters replay mode from Monaco focus", async ({ page }) => {
