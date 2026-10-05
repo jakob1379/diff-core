@@ -470,6 +470,7 @@ export default function App() {
 
   // Flow review tick-off state (session-only)
   const [reviewedGroupIds, setReviewedGroupIds] = useState<Set<string>>(new Set());
+  const [reviewedFilePaths, setReviewedFilePaths] = useState<Set<string>>(new Set());
   // Empty groups that the user explicitly dismissed (session-only).
   const [dismissedEmptyGroupIds, setDismissedEmptyGroupIds] = useState<Set<string>>(new Set());
 
@@ -640,6 +641,7 @@ export default function App() {
   const selectedGroupRef = useRef(selectedGroup);
   const selectedFileRef = useRef(selectedFile);
   const sortedGroupsRef = useRef<FlowGroup[]>([]);
+  const reviewGroupsRef = useRef<{ id: string; files: string[] }[]>([]);
   const replayActiveRef = useRef(replayActive);
   const replayStepRef = useRef(replayStep);
   selectedGroupRef.current = selectedGroup;
@@ -1224,6 +1226,7 @@ export default function App() {
     setNewCommitsAvailable(false);
     // Reset review tick-off state
     setReviewedGroupIds(new Set());
+    setReviewedFilePaths(new Set());
     setDismissedEmptyGroupIds(new Set());
     // Reset infrastructure group state
     setInfraExpanded(false);
@@ -1537,6 +1540,7 @@ export default function App() {
           : prev,
       );
       setReviewedGroupIds(new Set());
+      setReviewedFilePaths(new Set());
       if (opts?.fromCache) {
         showToast("Restored cached refinement");
       } else {
@@ -1771,7 +1775,7 @@ export default function App() {
       },
       setError: (msg: string | null) => setError(msg),
       showNewCommits: (v: boolean) => setNewCommitsAvailable(v),
-      clearAnalysis: () => { setAnalysis(null); setSelectedGroup(null); setSelectedFile(null); setFileDiff(null); setOverview(null); setDeepAnalyses({}); setOriginalGroups(null); setRefinedGroups(null); setRefinementResponse(null); setRefinementProvider(null); setRefinementModel(null); setRefinementHadChanges(null); setShowRefined(false); refinementApplied.current = false; setReviewedGroupIds(new Set()); setComments([]); setCommentInput(null); setCommentText(""); setRightPanelTab("annotations"); setSourceFocusRequest(null); setActivityJob(null); setActivityEntries([]); setActivityError(null); setActivityViewMode("stream"); setInspectedActivityId(null); },
+      clearAnalysis: () => { setAnalysis(null); setSelectedGroup(null); setSelectedFile(null); setFileDiff(null); setOverview(null); setDeepAnalyses({}); setOriginalGroups(null); setRefinedGroups(null); setRefinementResponse(null); setRefinementProvider(null); setRefinementModel(null); setRefinementHadChanges(null); setShowRefined(false); refinementApplied.current = false; setReviewedGroupIds(new Set()); setReviewedFilePaths(new Set()); setComments([]); setCommentInput(null); setCommentText(""); setRightPanelTab("annotations"); setSourceFocusRequest(null); setActivityJob(null); setActivityEntries([]); setActivityError(null); setActivityViewMode("stream"); setInspectedActivityId(null); },
       openAiSetup: (step: OnboardingStep = "recommended") => openAiSetup(step),
       dismissAiSetup: () => dismissAiSetup(),
       getAiSetupState: () => ({ open: aiSetupOpen, step: aiSetupStep }),
@@ -1780,6 +1784,8 @@ export default function App() {
       getReplayState: () => ({ active: replayActive, step: replayStep, visited: Array.from(replayVisited) }),
       toggleGroupReviewed: (id: string) => toggleGroupReviewed(id),
       getReviewedGroupIds: () => Array.from(reviewedGroupIds),
+      toggleFileReviewed: (path: string) => toggleFileReviewed(path),
+      getReviewedFilePaths: () => Array.from(reviewedFilePaths),
       getActivityEntries: () => activityEntries,
       getActivityJob: () => activityJob,
       crashPanel: (name: string | null) => setCrashPanel(name),
@@ -2029,6 +2035,15 @@ export default function App() {
     [sortedGroups, dismissedEmptyGroupIds],
   );
 
+  // Everything that can be ticked off: flow groups plus the Ungrouped bucket (id "infra").
+  const reviewGroups = useMemo(() => {
+    const groups = sortedGroups.map((g) => ({ id: g.id, files: g.files.map((f) => f.path) }));
+    const infra = analysis?.infrastructure_group;
+    if (infra && infra.files.length > 0) groups.push({ id: "infra", files: infra.files });
+    return groups;
+  }, [sortedGroups, analysis]);
+  reviewGroupsRef.current = reviewGroups;
+
   // Get the Pass 2 deep analysis for the currently selected group
   const groupDeepAnalysis: Pass2Response | undefined = selectedGroup
     ? deepAnalyses[selectedGroup.id]
@@ -2174,18 +2189,54 @@ export default function App() {
     openAiSetup("api");
   }, [llmSettings, openAiSetup]);
 
-  /** Toggle reviewed state for a flow group. */
+  /** Toggle reviewed state for a flow group; all its files follow. */
   const toggleGroupReviewed = useCallback((groupId: string) => {
+    const nowReviewed = !reviewedGroupIds.has(groupId);
+    const nextGroups = new Set(reviewedGroupIds);
+    if (nowReviewed) {
+      nextGroups.add(groupId);
+    } else {
+      nextGroups.delete(groupId);
+    }
+    setReviewedGroupIds(nextGroups);
+    const group = reviewGroupsRef.current.find((g) => g.id === groupId);
+    if (group) {
+      const nextFiles = new Set(reviewedFilePaths);
+      for (const path of group.files) {
+        if (nowReviewed) {
+          nextFiles.add(path);
+        } else {
+          nextFiles.delete(path);
+        }
+      }
+      setReviewedFilePaths(nextFiles);
+    }
+  }, [reviewedGroupIds, reviewedFilePaths]);
+
+  /** Toggle reviewed state for a single file; the owning group follows once all its files are reviewed. */
+  const toggleFileReviewed = useCallback((path: string) => {
+    const nowReviewed = !reviewedFilePaths.has(path);
+    const nextFiles = new Set(reviewedFilePaths);
+    if (nowReviewed) {
+      nextFiles.add(path);
+    } else {
+      nextFiles.delete(path);
+    }
+    setReviewedFilePaths(nextFiles);
+    const owner = reviewGroupsRef.current.find((g) => g.files.includes(path));
+    if (!owner) return;
+    const allReviewed = owner.files.every((p) => nextFiles.has(p));
     setReviewedGroupIds((prev) => {
+      if (allReviewed === prev.has(owner.id)) return prev;
       const next = new Set(prev);
-      if (next.has(groupId)) {
-        next.delete(groupId);
+      if (allReviewed) {
+        next.add(owner.id);
       } else {
-        next.add(groupId);
+        next.delete(owner.id);
       }
       return next;
     });
-  }, []);
+  }, [reviewedFilePaths]);
 
   /** Build the absolute file path from repo path + relative path. */
   const buildAbsolutePath = useCallback(
@@ -2483,6 +2534,7 @@ export default function App() {
       setOriginalGroups(null);
       setShowRefined(false);
       setReviewedGroupIds(new Set());
+      setReviewedFilePaths(new Set());
       if (updated.groups.length > 0) {
         const sorted = [...updated.groups].sort((a, b) => a.review_order - b.review_order);
         handleSelectGroup(sorted[0]);
@@ -2790,7 +2842,7 @@ export default function App() {
       // When Monaco has focus, only intercept known app shortcut keys.
       // Let other keys (arrows, Page Up/Down, etc.) pass through to Monaco for scrolling.
       if (isInMonaco) {
-        const appKeys = new Set(["j", "k", "J", "K", "r", "x", "y", "Y", "c", "C"]);
+        const appKeys = new Set(["j", "k", "J", "K", "r", "x", "X", "y", "Y", "c", "C"]);
         if (!appKeys.has(e.key)) {
           return;
         }
@@ -2849,10 +2901,19 @@ export default function App() {
         return;
       }
 
-      // x toggles reviewed state on the currently selected group
-      if (e.key === "x" && !e.metaKey && !e.ctrlKey && group) {
+      // x toggles reviewed state on the currently selected file
+      if (e.key === "x" && !e.metaKey && !e.ctrlKey && file) {
         consume();
-        toggleGroupReviewed(group.id);
+        toggleFileReviewed(file);
+        return;
+      }
+
+      // X (shift+x) toggles reviewed state on the currently selected group
+      if (e.key === "X" && !e.metaKey && !e.ctrlKey && (group || file)) {
+        consume();
+        const owner = file ? reviewGroupsRef.current.find((g) => g.files.includes(file)) : undefined;
+        const targetId = owner?.id ?? group?.id;
+        if (targetId) toggleGroupReviewed(targetId);
         return;
       }
 
@@ -2959,7 +3020,7 @@ export default function App() {
 
     window.addEventListener("keydown", handleKeyDown, true);
     return () => window.removeEventListener("keydown", handleKeyDown, true);
-  }, [handleSelectFile, handleSelectFileDebounced, handleSelectGroup, enterReplay, exitReplay, goToReplayStep, toggleGroupReviewed, copyFilePath, copyFlowPaths, openCommentInput, exportComments, closeTab]);
+  }, [handleSelectFile, handleSelectFileDebounced, handleSelectGroup, enterReplay, exitReplay, goToReplayStep, toggleGroupReviewed, toggleFileReviewed, copyFilePath, copyFlowPaths, openCommentInput, exportComments, closeTab]);
 
   const handleSelectBase = useCallback((branch: string) => {
     refsPinned.current = true;
@@ -3786,7 +3847,7 @@ export default function App() {
               {analysis.summary.total_groups} groups
               {reviewedGroupIds.size > 0 && (
                 <span className="reviewed-counter">
-                  {" "}&middot; {reviewedGroupIds.size}/{sortedGroups.length} reviewed
+                  {" "}&middot; {reviewedGroupIds.size}/{reviewGroups.length} reviewed
                 </span>
               )}
             </span>
@@ -4395,7 +4456,7 @@ export default function App() {
                   {group.files.map((file) => (
                     <button
                       key={file.path}
-                      className={`group-rail-file ${selectedFile === file.path ? "selected" : ""}`}
+                      className={`group-rail-file ${selectedFile === file.path ? "selected" : ""} ${reviewedFilePaths.has(file.path) ? "file-reviewed" : ""}`}
                       title={file.path}
                       onClick={(e) => {
                         e.stopPropagation();
@@ -4615,13 +4676,23 @@ export default function App() {
                           return (
                             <li
                               key={file.path}
-                              className={`file-item ${selectedFile === file.path ? "selected" : ""} ${fileMoved ? "file-moved" : ""}`}
+                              className={`file-item ${selectedFile === file.path ? "selected" : ""} ${fileMoved ? "file-moved" : ""} ${reviewedFilePaths.has(file.path) ? "file-reviewed" : ""}`}
                               onClick={(e) => {
                                 e.stopPropagation();
                                 openFileInTab(file.path, group.id);
                               }}
                               onContextMenu={(e) => handleFileContextMenu(e, file.path)}
                             >
+                              <span
+                                className={`file-review-check ${reviewedFilePaths.has(file.path) ? "checked" : ""}`}
+                                title={reviewedFilePaths.has(file.path) ? "Mark as unreviewed" : "Mark as reviewed"}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  toggleFileReviewed(file.path);
+                                }}
+                              >
+                                {reviewedFilePaths.has(file.path) ? "✓" : ""}
+                              </span>
                               {replayActive && replayVisited.has(file.path) && (
                                 <span className="replay-visited-check" title="Visited">&#10003;</span>
                               )}
@@ -4671,12 +4742,22 @@ export default function App() {
               })}
               {/* Infrastructure group — collapsed by default, shows count, with sub-groups */}
               {analysis?.infrastructure_group && analysis.infrastructure_group.files.length > 0 && (
-                <div className={`group-item infra-group ${selectedGroup?.id === "infra" ? "selected" : ""}`}>
+                <div className={`group-item infra-group ${selectedGroup?.id === "infra" ? "selected" : ""} ${reviewedGroupIds.has("infra") ? "group-reviewed" : ""}`}>
                   <div
                     className="group-header"
                     style={{ cursor: "pointer" }}
                     onClick={() => setInfraExpanded((prev) => !prev)}
                   >
+                    <span
+                      className={`group-review-check ${reviewedGroupIds.has("infra") ? "checked" : ""}`}
+                      title={reviewedGroupIds.has("infra") ? "Mark as unreviewed" : "Mark as reviewed"}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleGroupReviewed("infra");
+                      }}
+                    >
+                      {reviewedGroupIds.has("infra") ? "\u2713" : ""}
+                    </span>
                     <span className="group-name">
                       Ungrouped
                     </span>
@@ -4722,13 +4803,23 @@ export default function App() {
                                   {sg.files.map((f) => (
                                     <li
                                       key={f}
-                                      className={`file-item ${selectedFile === f ? "selected" : ""}`}
+                                      className={`file-item ${selectedFile === f ? "selected" : ""} ${reviewedFilePaths.has(f) ? "file-reviewed" : ""}`}
                                       onClick={(e) => {
                                         e.stopPropagation();
                                         if (selectedGroup?.id !== "infra" && infraGroup) setSelectedGroup(infraGroup);
                                         openFileInTab(f, "infra");
                                       }}
                                     >
+                                      <span
+                                        className={`file-review-check ${reviewedFilePaths.has(f) ? "checked" : ""}`}
+                                        title={reviewedFilePaths.has(f) ? "Mark as unreviewed" : "Mark as reviewed"}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          toggleFileReviewed(f);
+                                        }}
+                                      >
+                                        {reviewedFilePaths.has(f) ? "\u2713" : ""}
+                                      </span>
                                       <span className="file-path">{shortPath(f)}</span>
                                     </li>
                                   ))}
@@ -4745,13 +4836,23 @@ export default function App() {
                           ).map((f) => (
                             <li
                               key={f}
-                              className={`file-item ${selectedFile === f ? "selected" : ""}`}
+                              className={`file-item ${selectedFile === f ? "selected" : ""} ${reviewedFilePaths.has(f) ? "file-reviewed" : ""}`}
                               onClick={(e) => {
                                 e.stopPropagation();
                                 if (selectedGroup?.id !== "infra" && infraGroup) setSelectedGroup(infraGroup);
                                 openFileInTab(f, "infra");
                               }}
                             >
+                              <span
+                                className={`file-review-check ${reviewedFilePaths.has(f) ? "checked" : ""}`}
+                                title={reviewedFilePaths.has(f) ? "Mark as unreviewed" : "Mark as reviewed"}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  toggleFileReviewed(f);
+                                }}
+                              >
+                                {reviewedFilePaths.has(f) ? "\u2713" : ""}
+                              </span>
                               <span className="file-path">{shortPath(f)}</span>
                             </li>
                           ))}
@@ -5291,7 +5392,8 @@ export default function App() {
               <span><kbd>k</kbd> prev file</span>
               <span><kbd>J</kbd> next group</span>
               <span><kbd>K</kbd> prev group</span>
-              <span><kbd>x</kbd> mark reviewed</span>
+              <span><kbd>x</kbd> file reviewed</span>
+              <span><kbd>X</kbd> flow reviewed</span>
               <span><kbd>y</kbd> copy path</span>
               <span><kbd>Y</kbd> copy flow</span>
               <span><kbd>c</kbd> comment</span>
